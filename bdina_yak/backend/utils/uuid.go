@@ -1,4 +1,4 @@
-package toolKit
+package utils
 
 import "github.com/gofrs/uuid"
 

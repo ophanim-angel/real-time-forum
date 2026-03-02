@@ -1,4 +1,4 @@
-package toolKit
+package utils
 
 import (
 	"fmt"
@@ -18,11 +18,10 @@ func HashPassword(password string) (string, error) {
 
 // CheckPassword compares a plain text password with a bcrypt hash
 // Returns true if they match, false otherwise
-func checkPassword(password, hash string) bool {
+func CheckPassword(password, hash string) bool {
 	if password == "" || hash == "" {
 		return false
 	}
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err == nil
 }
- 
