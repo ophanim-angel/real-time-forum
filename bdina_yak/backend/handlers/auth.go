@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
+	middleware "toolKit/backend/middlewares"
 	"toolKit/backend/models"
 	"toolKit/backend/utils"
 
@@ -60,6 +62,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// 3. Hash Password
 	hashedPassword, err := utils.HashPassword(input.Password)
 	if err != nil {
+		log.Println("Password hashing error:", err)
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
@@ -74,15 +77,15 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	`
 	_, err = h.DB.Exec(query, userID, input.Nickname, input.Email, hashedPassword, input.FirstName, input.LastName, input.Age, input.Gender)
 	if err != nil {
-		// Check if it's a SQLite error
+		// Check if it's a SQLite UNIQUE constraint error
 		if sqliteErr, ok := err.(sqlite3.Error); ok {
-			// Code 19 = SQLITE_CONSTRAINT (UNIQUE constraint failed)
 			if sqliteErr.Code == sqlite3.ErrConstraint {
 				http.Error(w, "Nickname or Email already exists", http.StatusConflict)
 				return
 			}
 		}
-		log.Println("Database error:", err)
+		// For other errors, log and return generic message
+		log.Println("Database error during registration:", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -123,29 +126,44 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var userID, nickname, passwordHash string
 	err := h.DB.QueryRow(query, input.Identifier, input.Identifier).Scan(&userID, &nickname, &passwordHash)
 
+	// 4. Check: User not found?
 	if err == sql.ErrNoRows {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
+
+	// 5. Check: Any OTHER database error? (IMPORTANT!)
 	if err != nil {
-		http.Error(w, "Internal error", http.StatusInternalServerError)
+		log.Println("Database error during login:", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// 4. Check Password
+	// 6. Check: Wrong password?
 	if !utils.CheckPassword(input.Password, passwordHash) {
 		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
-	// 5. Generate JWT Token
+	// 7. Update is_online status
+	_, err = h.DB.Exec(
+		"UPDATE users SET is_online = 1 WHERE id = ?",
+		userID,
+	)
+	if err != nil {
+		log.Println("Warning: Could not update online status:", err)
+		// Don't fail the login for this - just log it
+	}
+
+	// 8. Generate JWT Token
 	token, err := utils.GenerateToken(userID, nickname)
 	if err != nil {
+		log.Println("Token generation error:", err)
 		http.Error(w, "Internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// 6. Success Response
+	// 9. Success Response
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message":  "Login successful",
@@ -153,4 +171,38 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		"user_id":  userID,
 		"nickname": nickname,
 	})
+}
+
+// Logout handles user logout
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get user_id from context (using middleware helper)
+	userID := middleware.GetUserIDFromContext(r)
+	if userID == "" {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Set is_online = 0
+	_, err := h.DB.Exec(
+		"UPDATE users SET is_online = 0 WHERE id = ?",
+		userID,
+	)
+	if err != nil {
+		log.Println("Warning: Could not update online status:", err)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "Logged out successfully",
+	})
+}
+
+// Helper: Sanitize string input (trim spaces)
+func sanitizeInput(s string) string {
+	return strings.TrimSpace(s)
 }
