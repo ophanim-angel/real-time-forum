@@ -1,7 +1,7 @@
 package models
 
 // Post represents a post in the database
-type post struct {
+type Post struct {
 	ID        string `json:"id"`
 	UserID    string `json:"user_id"`
 	Nickname  string `json:"nickname"`
